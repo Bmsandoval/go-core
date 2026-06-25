@@ -81,6 +81,17 @@ type Options struct {
 	DeadlineName string
 	TimerName    string
 	CSRFName     string
+
+	// UserIDHttpOnly / DeadlineHttpOnly force the UserID / SessionDeadline cookies
+	// to be HttpOnly. They default to false so a SPA can read them (session-presence
+	// check / double-submit). Set true on backends where no client reads those
+	// cookies and you prefer them locked down.
+	UserIDHttpOnly   bool
+	DeadlineHttpOnly bool
+
+	// CSRFMaxAge, when > 0, makes the CSRF cookie persistent for that duration
+	// instead of a session cookie (the default when 0).
+	CSRFMaxAge time.Duration
 }
 
 // Default returns Options populated with the default cookie names and a safe,
@@ -140,6 +151,14 @@ type SessionParams struct {
 	// treated as a session cookie by net/http; pass a positive duration for a
 	// persistent session.
 	MaxAge time.Duration
+
+	// TokenMaxAge, when > 0, overrides MaxAge for the JWT, UserID, and
+	// SessionTimer cookies — the short-lived "token tier" of a two-tier session.
+	// DeadlineMaxAge, when > 0, overrides MaxAge for the SessionDeadline cookie —
+	// the long-lived "deadline tier" (absolute expiry). Leave both 0 to apply
+	// MaxAge to every cookie (single-tier; backward-compatible).
+	TokenMaxAge    time.Duration
+	DeadlineMaxAge time.Duration
 }
 
 // SetSession writes the JWT, UserID, SessionDeadline, and SessionTimer cookies.
@@ -150,12 +169,21 @@ type SessionParams struct {
 // without exposing the token.
 func SetSession(w http.ResponseWriter, p SessionParams, o Options) {
 	o = o.withDefaults()
-	maxAge := maxAgeSeconds(p.MaxAge)
+	tokenAge := p.MaxAge
+	if p.TokenMaxAge > 0 {
+		tokenAge = p.TokenMaxAge
+	}
+	deadlineAge := p.MaxAge
+	if p.DeadlineMaxAge > 0 {
+		deadlineAge = p.DeadlineMaxAge
+	}
+	token := maxAgeSeconds(tokenAge)
+	deadline := maxAgeSeconds(deadlineAge)
 
-	http.SetCookie(w, o.cookie(o.JWTName, p.JWT, maxAge, true))
-	http.SetCookie(w, o.cookie(o.UserIDName, p.UserID, maxAge, false))
-	http.SetCookie(w, o.cookie(o.DeadlineName, fmtUnix(p.Deadline), maxAge, false))
-	http.SetCookie(w, o.cookie(o.TimerName, fmtUnix(p.Deadline), maxAge, true))
+	http.SetCookie(w, o.cookie(o.JWTName, p.JWT, token, true))
+	http.SetCookie(w, o.cookie(o.UserIDName, p.UserID, token, o.UserIDHttpOnly))
+	http.SetCookie(w, o.cookie(o.DeadlineName, fmtUnix(p.Deadline), deadline, o.DeadlineHttpOnly))
+	http.SetCookie(w, o.cookie(o.TimerName, fmtUnix(p.Deadline), token, true))
 }
 
 // ClearSession expires all session and CSRF cookies. The X-User-Context header
@@ -190,7 +218,7 @@ func SetCSRF(w http.ResponseWriter, token string, o Options) string {
 	if token == "" {
 		token = NewCSRFToken()
 	}
-	c := o.cookie(o.CSRFName, token, 0, false)
+	c := o.cookie(o.CSRFName, token, maxAgeSeconds(o.CSRFMaxAge), false)
 	http.SetCookie(w, c)
 	return token
 }

@@ -1,0 +1,99 @@
+package authcookies
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
+func cookies(t *testing.T, set func(w http.ResponseWriter)) map[string]*http.Cookie {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	set(rec)
+	res := &http.Response{Header: rec.Header()}
+	out := map[string]*http.Cookie{}
+	for _, c := range res.Cookies() {
+		out[c.Name] = c
+	}
+	return out
+}
+
+// The load-bearing security property: a two-tier session writes the JWT/UserID/
+// Timer cookies at the short TokenMaxAge and SessionDeadline at the long
+// DeadlineMaxAge — so the bearer-token cookie never outlives its window.
+func TestTwoTierMaxAge(t *testing.T) {
+	got := cookies(t, func(w http.ResponseWriter) {
+		SetSession(w, SessionParams{
+			JWT:            "tok",
+			UserID:         "sub-1",
+			Deadline:       time.Unix(1700000000, 0),
+			TokenMaxAge:    30 * time.Minute,
+			DeadlineMaxAge: 24 * time.Hour,
+		}, Default())
+	})
+	want := map[string]int{
+		DefaultJWTName:      1800,
+		DefaultUserIDName:   1800,
+		DefaultTimerName:    1800,
+		DefaultDeadlineName: 86400,
+	}
+	for name, age := range want {
+		c, ok := got[name]
+		if !ok {
+			t.Fatalf("cookie %s not set", name)
+		}
+		if c.MaxAge != age {
+			t.Errorf("%s MaxAge = %d, want %d", name, c.MaxAge, age)
+		}
+	}
+}
+
+// Back-compat: with only MaxAge set, every session cookie gets it (single tier).
+func TestSingleTierBackCompat(t *testing.T) {
+	got := cookies(t, func(w http.ResponseWriter) {
+		SetSession(w, SessionParams{JWT: "t", UserID: "u", MaxAge: time.Hour}, Default())
+	})
+	for _, name := range []string{DefaultJWTName, DefaultUserIDName, DefaultTimerName, DefaultDeadlineName} {
+		if got[name].MaxAge != 3600 {
+			t.Errorf("%s MaxAge = %d, want 3600", name, got[name].MaxAge)
+		}
+	}
+}
+
+// HttpOnly: defaults keep UserID/Deadline readable (SPA); the opt-in flags lock them.
+func TestHttpOnlyOptions(t *testing.T) {
+	def := cookies(t, func(w http.ResponseWriter) {
+		SetSession(w, SessionParams{JWT: "t", UserID: "u"}, Default())
+	})
+	if def[DefaultUserIDName].HttpOnly || def[DefaultDeadlineName].HttpOnly {
+		t.Error("UserID/Deadline should be readable by default")
+	}
+	if !def[DefaultJWTName].HttpOnly || !def[DefaultTimerName].HttpOnly {
+		t.Error("JWT/Timer must always be HttpOnly")
+	}
+
+	o := Default()
+	o.UserIDHttpOnly = true
+	o.DeadlineHttpOnly = true
+	locked := cookies(t, func(w http.ResponseWriter) {
+		SetSession(w, SessionParams{JWT: "t", UserID: "u"}, o)
+	})
+	if !locked[DefaultUserIDName].HttpOnly || !locked[DefaultDeadlineName].HttpOnly {
+		t.Error("UserID/Deadline should be HttpOnly when opted in")
+	}
+}
+
+// CSRF: session cookie by default; persistent when CSRFMaxAge is set.
+func TestCSRFMaxAge(t *testing.T) {
+	sess := cookies(t, func(w http.ResponseWriter) { SetCSRF(w, "x", Default()) })
+	if sess[DefaultCSRFName].MaxAge != 0 {
+		t.Errorf("default CSRF MaxAge = %d, want 0 (session)", sess[DefaultCSRFName].MaxAge)
+	}
+	o := Default()
+	o.CSRFMaxAge = 24 * time.Hour
+	persist := cookies(t, func(w http.ResponseWriter) { SetCSRF(w, "x", o) })
+	if persist[DefaultCSRFName].MaxAge != 86400 {
+		t.Errorf("persistent CSRF MaxAge = %d, want 86400", persist[DefaultCSRFName].MaxAge)
+	}
+}
