@@ -147,6 +147,12 @@ type SessionParams struct {
 	// published to the SPA as a Unix timestamp in the SessionDeadline cookie.
 	Deadline time.Time
 
+	// Timer is the soft-timeout instant published in the SessionTimer cookie —
+	// the moment the *idle* window lapses, distinct from the absolute Deadline.
+	// In a two-tier session this is now+TokenMaxAge, NOT now+DeadlineMaxAge.
+	// Leave it zero to fall back to Deadline (single-tier; backward-compatible).
+	Timer time.Time
+
 	// MaxAge is the lifetime applied to every session cookie. Values <= 0 are
 	// treated as a session cookie by net/http; pass a positive duration for a
 	// persistent session.
@@ -180,10 +186,17 @@ func SetSession(w http.ResponseWriter, p SessionParams, o Options) {
 	token := maxAgeSeconds(tokenAge)
 	deadline := maxAgeSeconds(deadlineAge)
 
+	// The SessionTimer cookie carries the soft-timeout instant. Fall back to
+	// Deadline when Timer is unset so single-tier callers are unaffected.
+	timerVal := p.Timer
+	if timerVal.IsZero() {
+		timerVal = p.Deadline
+	}
+
 	http.SetCookie(w, o.cookie(o.JWTName, p.JWT, token, true))
 	http.SetCookie(w, o.cookie(o.UserIDName, p.UserID, token, o.UserIDHttpOnly))
 	http.SetCookie(w, o.cookie(o.DeadlineName, fmtUnix(p.Deadline), deadline, o.DeadlineHttpOnly))
-	http.SetCookie(w, o.cookie(o.TimerName, fmtUnix(p.Deadline), token, true))
+	http.SetCookie(w, o.cookie(o.TimerName, fmtUnix(timerVal), token, true))
 }
 
 // ClearSession expires all session and CSRF cookies. The X-User-Context header

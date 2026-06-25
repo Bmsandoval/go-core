@@ -49,6 +49,33 @@ func TestTwoTierMaxAge(t *testing.T) {
 	}
 }
 
+// The SessionTimer cookie VALUE must carry the soft-timeout instant (Timer),
+// not the absolute Deadline — the two-tier regression we are guarding against.
+func TestTimerValueDistinctFromDeadline(t *testing.T) {
+	timer := time.Unix(1700001800, 0)    // now + 30m
+	deadline := time.Unix(1700086400, 0) // now + 24h
+	got := cookies(t, func(w http.ResponseWriter) {
+		SetSession(w, SessionParams{JWT: "t", UserID: "u", Timer: timer, Deadline: deadline}, Default())
+	})
+	if got[DefaultTimerName].Value != "1700001800" {
+		t.Errorf("SessionTimer value = %q, want soft-timeout 1700001800 (not deadline)", got[DefaultTimerName].Value)
+	}
+	if got[DefaultDeadlineName].Value != "1700086400" {
+		t.Errorf("SessionDeadline value = %q, want 1700086400", got[DefaultDeadlineName].Value)
+	}
+}
+
+// Back-compat: an unset Timer falls back to Deadline (single-tier callers).
+func TestTimerFallsBackToDeadline(t *testing.T) {
+	deadline := time.Unix(1700086400, 0)
+	got := cookies(t, func(w http.ResponseWriter) {
+		SetSession(w, SessionParams{JWT: "t", UserID: "u", Deadline: deadline}, Default())
+	})
+	if got[DefaultTimerName].Value != "1700086400" {
+		t.Errorf("SessionTimer value = %q, want deadline fallback 1700086400", got[DefaultTimerName].Value)
+	}
+}
+
 // Back-compat: with only MaxAge set, every session cookie gets it (single tier).
 func TestSingleTierBackCompat(t *testing.T) {
 	got := cookies(t, func(w http.ResponseWriter) {
