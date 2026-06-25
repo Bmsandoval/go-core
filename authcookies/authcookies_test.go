@@ -111,6 +111,50 @@ func TestHttpOnlyOptions(t *testing.T) {
 	}
 }
 
+// ClearSession expires exactly the 4 session cookies (NOT CSRF) with the same
+// HttpOnly posture they were set with, so logout is byte-identical to the write.
+func TestClearSessionNoCSRF(t *testing.T) {
+	o := Default()
+	o.UserIDHttpOnly = true // SetSession posture: UserID HttpOnly, Deadline readable
+	got := cookies(t, func(w http.ResponseWriter) { ClearSession(w, o) })
+	if _, ok := got[DefaultCSRFName]; ok {
+		t.Error("ClearSession must not emit a CSRF-Token cookie")
+	}
+	want := map[string]bool{
+		DefaultJWTName:      true,
+		DefaultUserIDName:   true,  // o.UserIDHttpOnly
+		DefaultDeadlineName: false, // o.DeadlineHttpOnly (default)
+		DefaultTimerName:    true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("cleared %d cookies, want %d: %v", len(got), len(want), got)
+	}
+	for name, ho := range want {
+		c, ok := got[name]
+		if !ok {
+			t.Fatalf("cleared cookie %s missing", name)
+		}
+		if c.MaxAge != -1 {
+			t.Errorf("%s MaxAge = %d, want -1", name, c.MaxAge)
+		}
+		if c.HttpOnly != ho {
+			t.Errorf("%s cleared HttpOnly = %v, want %v", name, c.HttpOnly, ho)
+		}
+	}
+}
+
+// ClearCSRF expires only the CSRF cookie (readable), mirroring SetCSRF.
+func TestClearCSRF(t *testing.T) {
+	got := cookies(t, func(w http.ResponseWriter) { ClearCSRF(w, Default()) })
+	c, ok := got[DefaultCSRFName]
+	if !ok {
+		t.Fatal("CSRF-Token not cleared")
+	}
+	if c.MaxAge != -1 || c.HttpOnly {
+		t.Errorf("CSRF clear = {MaxAge:%d HttpOnly:%v}, want {-1 false}", c.MaxAge, c.HttpOnly)
+	}
+}
+
 // CSRF: session cookie by default; persistent when CSRFMaxAge is set.
 func TestCSRFMaxAge(t *testing.T) {
 	sess := cookies(t, func(w http.ResponseWriter) { SetCSRF(w, "x", Default()) })

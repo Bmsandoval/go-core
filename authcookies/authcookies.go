@@ -199,20 +199,42 @@ func SetSession(w http.ResponseWriter, p SessionParams, o Options) {
 	http.SetCookie(w, o.cookie(o.TimerName, fmtUnix(timerVal), token, true))
 }
 
-// ClearSession expires all session and CSRF cookies. The X-User-Context header
-// is cleared as well so a stale value is never propagated downstream.
+// ClearSession expires the four session cookies (JWT, UserID, SessionDeadline,
+// SessionTimer) and clears the X-User-Context header so a stale value is never
+// propagated downstream.
+//
+// Each cookie is expired with the SAME HttpOnly posture SetSession wrote it
+// with (JWT and SessionTimer always HttpOnly; UserID and SessionDeadline follow
+// Options) — though HttpOnly is moot on an already-empty cookie, keeping it
+// consistent makes the logout output byte-identical to the original write.
+//
+// The CSRF cookie is deliberately NOT cleared here: it is written separately by
+// SetCSRF, so it is cleared separately by ClearCSRF. A starter that never issues
+// a CSRF cookie thus emits no stray CSRF Set-Cookie on logout.
 func ClearSession(w http.ResponseWriter, o Options) {
 	o = o.withDefaults()
-	names := []string{o.JWTName, o.UserIDName, o.DeadlineName, o.TimerName, o.CSRFName}
-	for _, name := range names {
-		// HttpOnly is irrelevant for an expired empty cookie, but we keep it
-		// consistent with how the cookie was originally written.
-		httpOnly := name == o.JWTName || name == o.TimerName
-		c := o.cookie(name, "", 0, httpOnly)
+	httpOnly := map[string]bool{
+		o.JWTName:      true,
+		o.UserIDName:   o.UserIDHttpOnly,
+		o.DeadlineName: o.DeadlineHttpOnly,
+		o.TimerName:    true,
+	}
+	for _, name := range []string{o.JWTName, o.UserIDName, o.DeadlineName, o.TimerName} {
+		c := o.cookie(name, "", 0, httpOnly[name])
 		c.MaxAge = -1
 		http.SetCookie(w, c)
 	}
 	w.Header().Set(userContextHeaderName, "")
+}
+
+// ClearCSRF expires the CSRF-Token cookie (double-submit pattern). Call it
+// alongside ClearSession on logout for starters that issue a CSRF cookie via
+// SetCSRF; starters without CSRF simply never call it.
+func ClearCSRF(w http.ResponseWriter, o Options) {
+	o = o.withDefaults()
+	c := o.cookie(o.CSRFName, "", 0, false) // readable, mirroring SetCSRF
+	c.MaxAge = -1
+	http.SetCookie(w, c)
 }
 
 // SetCSRF writes the CSRF cookie using the supplied token.
