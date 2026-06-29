@@ -40,6 +40,7 @@ Module path: `github.com/Bmsandoval/go-core` · Go 1.25.
 | `logm` | Structured zap logging (ctx plumbing + HTTP access log) | Heavily trimmed merge of two sources: dropped CloudWatch core, grpc_ctxtags, go-kit, gorilla, and the external prettyconsole dep |
 | `stripe` | Dependency-free Stripe client | context-aware, bounded retry/backoff, typed `APIError` instead of masking non-2xx |
 | `validate` | Custom go-playground validators | Parameterized limits; dropped domain-specific rules; generic `OneOfFunc` |
+| `fuzzy` | fzf-style fuzzy finder + generic ranked `Filter` | Faithful port of fzf's FuzzyMatchV1 scoring (boundary/camelCase/consecutive bonuses, gap penalties); mirrored in php-core + react-core so ranking matches across stacks |
 
 ## Using it from a starter
 
